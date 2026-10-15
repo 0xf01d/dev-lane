@@ -42,7 +42,7 @@ COPY --from=node:24-bookworm-slim /usr/local/ /usr/local/
 
 FROM node-layer AS opencode-layer
 ARG OPENCODE_VERSION=latest
-RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+RUN npm install -g --force "opencode-ai@${OPENCODE_VERSION}" \
     && opencode --version \
 # Claude Code too — never know when you need it :) (auth via env, nothing baked in)
     && npm install -g @anthropic-ai/claude-code \
@@ -58,7 +58,10 @@ USER lane
 ENV HOME=/home/lane
 RUN curl -fsSL https://nixos.org/nix/install -o /tmp/nix-install.sh \
     && sh /tmp/nix-install.sh --no-daemon \
-    && rm /tmp/nix-install.sh
+    && rm /tmp/nix-install.sh \
+    && echo "--- nix install debug ---" \
+    && ls -la /nix/var/nix/profiles/ 2>/dev/null \
+    && ls -la "$HOME/.nix-profile" 2>/dev/null || true
 
 # Channel pinned to nixpkgs-unstable (legacy nix-env path) + flake registry
 # pointing at the unstable branch (nix run nixpkgs#<pkg> path).
