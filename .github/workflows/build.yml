@@ -21,14 +21,13 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  # Native per-arch builds (NO QEMU: each arch builds on its own runner,
+  # then a tiny merge job assembles the multi-arch manifest).
+  build-amd64:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v5
-
-      - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -50,21 +49,69 @@ jobs:
             type=sha,prefix=sha-,format=long
             type=raw,value=date-{{date 'YYYYMMDD'}}
 
-      - name: Build & push (linux/amd64 + linux/arm64)
+      - name: Build & push (linux/amd64, native)
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.meta.outputs.tags }}-amd64
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push (linux/arm64, native)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}-arm64
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  merge-manifest:
+    needs: [build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest (latest / sha / date)
+        run: |
+          IMAGE="${{ env.IMAGE }}"
+          SHA_TAG="sha-${GITHUB_SHA}"
+          DATE_TAG="date-$(date -u +%Y%m%d)"
+          for TAG in latest "$SHA_TAG" "$DATE_TAG"; do
+            docker buildx imagetools create -t "$IMAGE:$TAG" \
+              "$IMAGE:${TAG}-amd64" "$IMAGE:${TAG}-arm64"
+          done
+
   smoke:
     # Runs the built image and enforces the project passing criteria:
     # a serve-driven lane with multi-turn persistence + env-injectable model.
-    needs: build
+    needs: merge-manifest
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
