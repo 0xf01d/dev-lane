@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 FROM apt-layer AS node-layer
 ARG NODE_IMAGE
-COPY --from=${NODE_IMAGE} /usr/local/ /usr/local/
+COPY --from=node:24-bookworm-slim /usr/local/ /usr/local/
 
 FROM node-layer AS opencode-layer
 ARG OPENCODE_VERSION=latest
