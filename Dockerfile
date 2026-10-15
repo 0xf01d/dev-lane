@@ -62,7 +62,13 @@ RUN curl -fsSL https://nixos.org/nix/install -o /tmp/nix-install.sh \
 
 # Channel pinned to nixpkgs-unstable (legacy nix-env path) + flake registry
 # pointing at the unstable branch (nix run nixpkgs#<pkg> path).
-RUN . "$HOME/.nix-profile/etc/profile.d/nix.sh" \
+# NOTE: the single-user installer puts its default profile at
+# /nix/var/nix/profiles/per-user/<user>/profile (the ~/.nix-profile symlink
+# is NOT created in docker builds without a login shell) — source nix.sh
+# from wherever it actually landed.
+RUN PROFILE_SH="$(ls /nix/var/nix/profiles/per-user/*/profile/etc/profile.d/nix.sh "$HOME"/.nix-profile/etc/profile.d/nix.sh 2>/dev/null | head -1)" \
+    && [ -n "$PROFILE_SH" ] || { echo "nix.sh not found:"; ls -la /nix/var/nix/profiles/ 2>/dev/null; exit 1; } \
+    && . "$PROFILE_SH" \
     && nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs \
     && nix-channel --update
 USER root
