@@ -39,7 +39,10 @@ COPY --from=node:24-bookworm-slim /usr/local/ /usr/local/
 FROM node-layer AS opencode-layer
 ARG OPENCODE_VERSION=latest
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
-    && opencode --version
+    && opencode --version \
+# Claude Code too — never know when you need it :) (auth via env, nothing baked in)
+    && npm install -g @anthropic-ai/claude-code \
+    && claude --version
 
 FROM opencode-layer AS nix-layer
 # Non-root user that owns /nix (single-user nix install).
