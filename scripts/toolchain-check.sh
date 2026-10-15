@@ -34,9 +34,11 @@ cc -O2 -o hello-c c.c && ./hello-c | grep -qx 'hello-c'
 printf 'fn main() {\n    println!("hello-rust");\n}\n' > r.rs
 rustc -O -o hello-rust r.rs && ./hello-rust | grep -qx 'hello-rust'
 
+mkdir -p gohello && cd gohello
 printf 'package main\nimport "fmt"\nfunc main(){ fmt.Println("hello-go") }\n' > main.go
 printf 'module hello\ngo 1.24\n' > go.mod
 GOFLAGS=-mod=mod go run . | grep -qx 'hello-go'
+cd ..
 
 elixir -e 'IO.puts "hello-elixir"' | grep -qx 'hello-elixir'
 
