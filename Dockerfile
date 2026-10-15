@@ -89,7 +89,7 @@ RUN chmod +x /usr/local/bin/lane-entrypoint /opt/lane/*.sh
 
 ENV HOME=/home/lane \
     USER=lane \
-    PATH="/home/lane/.nix-profile/bin:/nix/var/nix/profiles/profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/local/go/bin:${PATH}" \
+    PATH="/home/lane/.nix-profile/bin:/nix/var/nix/profiles/per-user/lane/profile/bin:/nix/var/nix/profiles/profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/local/go/bin:${PATH}" \
     OC_MODEL=opencode/step-5-preview-free \
     NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
