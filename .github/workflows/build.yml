@@ -1,0 +1,161 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly rebuild (Monday 03:37 UTC) — picks up fresh nixpkgs-unstable,
+    # new opencode release, and refreshed base/toolchain packages.
+    - cron: "37 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta (tags latest / sha / date)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=long
+            type=raw,value=date-{{date 'YYYYMMDD'}}
+
+      - name: Build & push (linux/amd64 + linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  smoke:
+    # Runs the built image and enforces the project passing criteria:
+    # a serve-driven lane with multi-turn persistence + env-injectable model.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      IMAGE_TAG: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      AISIX_BASE_URL: ${{ secrets.AISIX_BASE_URL }}
+      AISIX_API_KEY: ${{ secrets.AISIX_API_KEY }}
+      AISIX_MODEL: ${{ secrets.AISIX_MODEL }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: |
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            echo "::error::Secret OPENCODE_API_KEY is not set on this repo — the serve smoke test cannot run."
+            exit 1
+          fi
+          docker pull "$IMAGE_TAG"
+
+      - name: Start lane (opencode serve inside the container)
+        run: |
+          docker run -d --name lane -p 4096:4096 \
+            -e OPENCODE_API_KEY \
+            -e OC_MODEL=opencode/step-5-preview-free \
+            "$IMAGE_TAG" bash -c 'opencode serve --hostname 0.0.0.0 --port 4096'
+
+      - name: Wait for serve health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4096/global/health | grep -q '"healthy":true'; then
+              echo "serve healthy"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::opencode serve did not become healthy"
+          docker logs lane || true
+          exit 1
+
+      - name: Toolchain checks (in container)
+        run: docker exec lane bash /opt/lane/toolchain-check.sh
+
+      - name: Nix escape hatch — nix run nixpkgs#hello
+        run: timeout 900 docker exec lane nix run nixpkgs#hello -- --version
+
+      - name: Serve smoke test — two-turn lane driven from the runner
+        run: bash scripts/smoke-test.sh
+        env:
+          SMOKE_BASE_URL: http://127.0.0.1:4096
+
+      - name: One-shot `opencode run` also works
+        run: |
+          out="$(docker exec -e OPENCODE_API_KEY lane opencode run -m opencode/step-5-preview-free 'Reply with exactly: RUN-OK')"
+          echo "$out"
+          echo "$out" | grep -q 'RUN-OK'
+
+      - name: Env-injectable custom provider (aisix)
+        run: |
+          # Real secrets -> live message through the aisix provider; otherwise
+          # dummy values still prove env->config injection (no network call).
+          if [ -n "$AISIX_BASE_URL" ] && [ -n "$AISIX_API_KEY" ]; then
+            BASE_URL="$AISIX_BASE_URL"; KEY="$AISIX_API_KEY"; LIVE=1
+          else
+            echo "AISIX_* secrets not set — verifying injection with dummy values (live call skipped)"
+            BASE_URL="https://aisix.invalid/anthropic"; KEY="dummy-key-for-injection-test"; LIVE=0
+          fi
+          docker run -d --name lane-aisix -p 4196:4096 \
+            -e AISIX_BASE_URL="$BASE_URL" \
+            -e AISIX_API_KEY="$KEY" \
+            -e AISIX_MODEL="${AISIX_MODEL:-auto}" \
+            -e AISIX_LIVE_TEST="$LIVE" \
+            "$IMAGE_TAG" bash -c 'opencode serve --hostname 0.0.0.0 --port 4096'
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:4196/global/health | grep -q '"healthy":true' && break
+            sleep 2
+          done
+          SMOKE_BASE_URL=http://127.0.0.1:4196 bash scripts/provider-inject-test.sh
+
+      - name: Container logs on failure
+        if: failure()
+        run: |
+          docker logs lane || true
+          docker logs lane-aisix || true
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker rm -f lane lane-aisix 2>/dev/null || true
