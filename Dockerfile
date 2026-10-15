@@ -29,6 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-venv \
         rustc \
         tmux \
+        ripgrep \
+        fd-find \
+        fzf \
+        htop \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
