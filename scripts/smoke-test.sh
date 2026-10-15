@@ -38,9 +38,17 @@ SID="$(curl -sf -X POST "$BASE/session" \
 [ -n "$SID" ] || die "could not create session"
 echo "session: $SID"
 
-send() {
-  curl -sf --max-time 240 -X POST "$BASE/session/$SID/message" \
-    -H 'content-type: application/json' -d "$1"
+send() { # POST a message and print the body even on HTTP error (for CI logs)
+  local payload="$1" code body
+  body="$(curl -sS -w '\n%{http_code}' --max-time 240 -X POST "$BASE/session/$SID/message" \
+    -H 'Content-Type: application/json' -d "$payload")"
+  code="$(printf '%s' "$body" | tail -1)"
+  if [ "$code" != "200" ]; then
+    echo "POST /session/$SID/message -> HTTP $code" >&2
+    printf '%s\n' "$body" | head -20 >&2
+    return 22
+  fi
+  printf '%s' "$body" | head -n -1
 }
 
 say "3. message 1 — trivial prompt, completion with reply text"
